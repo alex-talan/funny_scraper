@@ -8,8 +8,9 @@ from dotenv import load_dotenv
 
 class ScrapingStrategy(ABC):
 
-    def __init__(self, main_url: str):
+    def __init__(self, main_url: str, name:str):
         self.main_url = main_url
+        self.name = name
     
     def scrap(self, k: int) -> list[str]:
         html = self._get_html(self.main_url)
@@ -66,15 +67,26 @@ class ScrapingStrategy(ABC):
 class AnthropicNewsScraper(ScrapingStrategy):
      
     def __init__(self):
-        super().__init__("https://www.anthropic.com/news")
+        super().__init__("https://www.anthropic.com/news", "Anthropic News")
     
     def is_news_link(self, absolute_url: str) -> bool:
         return "/news/" in absolute_url
     
+class LatentSpaceNewsScraper(ScrapingStrategy):
+     
+    def __init__(self):
+        super().__init__("https://www.latent.space/", "Latent Space News")
+    
+    def is_news_link(self, absolute_url: str) -> bool:
+        return "/p/" in absolute_url
+    
 
 class Scraper:
     def __init__(self):
-        self.strategies = [AnthropicNewsScraper()]
+        self.strategies = [
+            AnthropicNewsScraper(), 
+            LatentSpaceNewsScraper()
+        ]
 
     def scrape(self, k: int) -> list[str]:
         all_contents = []
