@@ -1,10 +1,85 @@
 import os
+import asyncio
 from abc import ABC, abstractmethod
 from urllib.parse import urljoin
-
 import httpx
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+
+from langchain_core.prompts import ChatPromptTemplate
+from langsmith.async_client import AsyncClient
+from langchain_openrouter import ChatOpenRouter
+from openrouter.errors.toomanyrequestsresponse_error import TooManyRequestsResponseError
+
+def build_langsmith_client(api_key: str) -> AsyncClient:
+    return AsyncClient(
+        api_key=api_key, 
+        api_url="https://eu.api.smith.langchain.com"
+    )
+
+class LlmProvider(ABC):
+
+    @abstractmethod
+    async def invoke(self, messages):
+        pass
+
+class PromptProvider(ABC):
+    
+    @abstractmethod
+    async def get_prompt(self) -> ChatPromptTemplate:
+        pass
+
+class LangsmithPromptProvider(PromptProvider):
+
+    def __init__(self, api_key: str, prompt_name: str):
+        self.client = build_langsmith_client(api_key) 
+        self.prompt_name = prompt_name
+
+    async def get_prompt(self) -> ChatPromptTemplate:
+        prompt: ChatPromptTemplate = await self.client.pull_prompt(self.prompt_name)
+        return prompt
+    
+class SummarizationPromptProvider(LangsmithPromptProvider):
+    def __init__(self):
+        super().__init__(
+            api_key=os.getenv("LANGSMITH_KEY"), 
+            prompt_name="funny_scraper_summary_prompt"
+        )
+
+class OpenRouterProvider(LlmProvider):
+
+    def __init__(self):
+        load_dotenv()
+
+        self.llm = ChatOpenRouter(
+            model=os.getenv("LLM_SUMMARY_MODEL"),
+            temperature=0,
+        )
+
+    async def invoke(self, messages):
+        for attempt in range(3):
+            try:
+                return await self.llm.ainvoke(messages)
+
+            except TooManyRequestsResponseError:
+                wait_time = 5 * (attempt + 1)
+                print(f"Rate limit reached. Retrying in {wait_time} seconds...")
+                await asyncio.sleep(wait_time)
+
+class BasicChain:
+
+    def __init__(self, 
+            llm_agent: LlmProvider,
+            prompt_provider: LangsmithPromptProvider):
+        self.llm_agent = llm_agent
+        self.prompt_provider = prompt_provider
+
+    async def invoke(self, input_message: str):
+        prompt_template = await self.prompt_provider.get_prompt()
+        messages = prompt_template.format_messages(question=input_message)
+        output = await self.llm_agent.invoke(messages)
+        return output.content
+
 
 class ScrapingStrategy(ABC):
 
@@ -63,7 +138,6 @@ class ScrapingStrategy(ABC):
     def is_news_link(self, absolute_url: str) -> bool:
         pass
 
-
 class AnthropicNewsScraper(ScrapingStrategy):
      
     def __init__(self):
@@ -80,7 +154,6 @@ class LatentSpaceNewsScraper(ScrapingStrategy):
     def is_news_link(self, absolute_url: str) -> bool:
         return "/p/" in absolute_url
     
-
 class Scraper:
     def __init__(self):
         self.strategies = [
@@ -102,21 +175,28 @@ class Orchestrator:
     def __init__(self):
         pass
 
-    def invoke(self):
+    async def invoke(self):
 
         load_dotenv()
 
         news_limit = int(os.getenv("NEWS_LIMIT") or 5)
-
         scraper = Scraper()
         contents = scraper.scrape(news_limit)
 
+        summary_agent = BasicChain(
+            llm_agent=OpenRouterProvider(),
+            prompt_provider=SummarizationPromptProvider()
+        )
+
         for i, content in enumerate(contents, 1):
-            print(f"Article {i}:\n{content}\n{'-'*80}\n")
+            #print(f"Article {i}:\n{content}\n{'-'*80}\n")
+            summary = await summary_agent.invoke(content)
+            print(f"Article {i}:\n{summary}\n{'-'*80}\n")
+
 
 def main():
     orchestrator = Orchestrator()
-    orchestrator.invoke()
+    asyncio.run(orchestrator.invoke())
 
 if __name__ == "__main__":
     main()

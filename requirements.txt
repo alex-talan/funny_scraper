@@ -2,3 +2,6 @@ httpx
 beautifulsoup4
 lxml
 python-dotenv
+langchain-core
+langsmith
+langchain-openrouter
