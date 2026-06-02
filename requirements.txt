@@ -5,3 +5,4 @@ python-dotenv
 langchain-core
 langsmith
 langchain-openrouter
+aiosmtpd 

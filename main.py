@@ -1,10 +1,12 @@
 import os
 import asyncio
+import smtplib
+import httpx
 from abc import ABC, abstractmethod
 from urllib.parse import urljoin
-import httpx
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from email.message import EmailMessage
 
 from langchain_core.prompts import ChatPromptTemplate
 from langsmith.async_client import AsyncClient
@@ -170,6 +172,30 @@ class Scraper:
 
         return all_contents
 
+class EmailSender:
+
+    def __init__(self):
+        load_dotenv()
+        self.smtp_host = os.getenv("SMTP_HOST")
+        self.smtp_port = int(os.getenv("SMTP_PORT") or 587)
+        self.username = os.getenv("SMTP_USERNAME")
+        self.password = os.getenv("SMTP_PASSWORD")
+        self.sender = os.getenv("EMAIL_FROM")
+
+    def send_email(self, recipient: str, subject: str, body: str):
+        msg = EmailMessage()
+        msg["From"] = self.sender
+        msg["To"] = recipient
+        msg["Subject"] = subject
+        msg.set_content(body)
+
+        with smtplib.SMTP(self.smtp_host, self.smtp_port) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.ehlo()
+            smtp.login(self.username, self.password)
+            smtp.send_message(msg)
+            smtp.quit()
 
 class Orchestrator:
     def __init__(self):
@@ -188,11 +214,19 @@ class Orchestrator:
             prompt_provider=SummarizationPromptProvider()
         )
 
+        news: list[str] = []
+
         for i, content in enumerate(contents, 1):
             #print(f"Article {i}:\n{content}\n{'-'*80}\n")
             summary = await summary_agent.invoke(content)
             print(f"Article {i}:\n{summary}\n{'-'*80}\n")
+            news.append(summary)
 
+        EmailSender().send_email(
+            os.getenv("EMAIL_TO"), 
+            "Knock knock, it's the funny scraper", 
+            "\n\n".join(news)
+        )
 
 def main():
     orchestrator = Orchestrator()
