@@ -1,14 +1,17 @@
 import os
 import asyncio
 import smtplib
+from urllib import response
 import httpx
 from abc import ABC, abstractmethod
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from email.message import EmailMessage
+from pydantic import BaseModel, Field
 
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers.pydantic import PydanticOutputParser
 from langsmith.async_client import AsyncClient
 from langchain_openrouter import ChatOpenRouter
 from openrouter.errors.toomanyrequestsresponse_error import TooManyRequestsResponseError
@@ -19,6 +22,11 @@ def build_langsmith_client(api_key: str) -> AsyncClient:
         api_url="https://eu.api.smith.langchain.com"
     )
 
+class EmailField(BaseModel):
+    subject: str = Field(description="The subject of the email")
+    body: str = Field(description="The body content of the email")
+
+
 class LlmProvider(ABC):
 
     @abstractmethod
@@ -28,7 +36,7 @@ class LlmProvider(ABC):
 class PromptProvider(ABC):
     
     @abstractmethod
-    async def get_prompt(self) -> ChatPromptTemplate:
+    async def get_prompt(self, variables:dict = {}) -> ChatPromptTemplate:
         pass
 
 class LangsmithPromptProvider(PromptProvider):
@@ -37,8 +45,11 @@ class LangsmithPromptProvider(PromptProvider):
         self.client = build_langsmith_client(api_key) 
         self.prompt_name = prompt_name
 
-    async def get_prompt(self) -> ChatPromptTemplate:
+    async def get_prompt(self, variables:dict = {}) -> ChatPromptTemplate:
         prompt: ChatPromptTemplate = await self.client.pull_prompt(self.prompt_name)
+        for variable, value in variables.items():
+            if variable in prompt.input_variables:
+                prompt = prompt.partial({variable: value})
         return prompt
     
 class SummarizationPromptProvider(LangsmithPromptProvider):
@@ -48,13 +59,20 @@ class SummarizationPromptProvider(LangsmithPromptProvider):
             prompt_name="funny_scraper_summary_prompt"
         )
 
+class EmailPromptProvider(LangsmithPromptProvider):
+    def __init__(self):
+        super().__init__(
+            api_key=os.getenv("LANGSMITH_KEY"), 
+            prompt_name="funny_scraper_email_prompt"
+        )
+
 class OpenRouterProvider(LlmProvider):
 
     def __init__(self):
         load_dotenv()
 
         self.llm = ChatOpenRouter(
-            model=os.getenv("LLM_SUMMARY_MODEL"),
+            model=os.getenv("MODEL_NAME"),
             temperature=0,
         )
 
@@ -71,18 +89,36 @@ class OpenRouterProvider(LlmProvider):
 class BasicChain:
 
     def __init__(self, 
-            llm_agent: LlmProvider,
-            prompt_provider: LangsmithPromptProvider):
-        self.llm_agent = llm_agent
+            llm_provider: LlmProvider,
+            prompt_provider: PromptProvider):
+        self.llm = llm_provider
         self.prompt_provider = prompt_provider
 
     async def invoke(self, input_message: str):
         prompt_template = await self.prompt_provider.get_prompt()
         messages = prompt_template.format_messages(question=input_message)
-        output = await self.llm_agent.invoke(messages)
+        output = await self.llm.invoke(messages)
         return output.content
 
+class PydanticChain(BasicChain):
 
+    def __init__(self, 
+            llm_provider: LlmProvider,
+            prompt_provider: PromptProvider,
+            pydantic_object: type):
+        super().__init__(llm_provider=llm_provider, prompt_provider=prompt_provider)
+        self.pydantic_object = pydantic_object
+
+    async def invoke(self, input_message: str):
+        output_parser = PydanticOutputParser(pydantic_object=self.pydantic_object)
+        format_instructions = output_parser.get_format_instructions()
+        prompt_template = await self.prompt_provider.get_prompt()
+
+        messages = prompt_template.format_messages(question=input_message, format_instructions=format_instructions)
+        output = await self.llm.invoke(messages)
+        response = output_parser.parse(output.content)
+        return response
+    
 class ScrapingStrategy(ABC):
 
     def __init__(self, main_url: str, name:str):
@@ -157,11 +193,8 @@ class LatentSpaceNewsScraper(ScrapingStrategy):
         return "/p/" in absolute_url
     
 class Scraper:
-    def __init__(self):
-        self.strategies = [
-            AnthropicNewsScraper(), 
-            LatentSpaceNewsScraper()
-        ]
+    def __init__(self, strategies: list[ScrapingStrategy]):
+        self.strategies = strategies
 
     def scrape(self, k: int) -> list[str]:
         all_contents = []
@@ -206,27 +239,51 @@ class Orchestrator:
         load_dotenv()
 
         news_limit = int(os.getenv("NEWS_LIMIT") or 5)
-        scraper = Scraper()
+        scraper = Scraper([
+            AnthropicNewsScraper(),
+            LatentSpaceNewsScraper()
+        ])
+
         contents = scraper.scrape(news_limit)
 
         summary_agent = BasicChain(
-            llm_agent=OpenRouterProvider(),
+            llm_provider=OpenRouterProvider(),
             prompt_provider=SummarizationPromptProvider()
         )
 
-        news: list[str] = []
+        email_agent = PydanticChain(
+            llm_provider=OpenRouterProvider(),
+            prompt_provider=EmailPromptProvider(),
+            pydantic_object=EmailField
+        )
 
-        for i, content in enumerate(contents, 1):
-            #print(f"Article {i}:\n{content}\n{'-'*80}\n")
+        async def summarize_article(i: int, content: str) -> str:
             summary = await summary_agent.invoke(content)
-            print(f"Article {i}:\n{summary}\n{'-'*80}\n")
-            news.append(summary)
+            return f"Article {i}:\n{summary}\n{'-'*3}\n"
+
+        tasks = [
+            summarize_article(i, content)
+            for i, content in enumerate(contents, 1)
+        ]
+
+        news = await asyncio.gather(*tasks)
+
+        for formatted_summary in news:
+            print(formatted_summary)
+
+
+        # for i, content in enumerate(contents, 1):
+        #     print(f"Article {i}:\n{content}\n{'-'*3}\n")
+
+        email:EmailField = await email_agent.invoke("\n\n".join(news))
+        print(f"Generated email:\nSubject: {email.subject}\nBody:\n{email.body}")
 
         EmailSender().send_email(
             os.getenv("EMAIL_TO"), 
             "Knock knock, it's the funny scraper", 
             "\n\n".join(news)
         )
+
 
 def main():
     orchestrator = Orchestrator()
