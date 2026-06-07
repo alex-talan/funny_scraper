@@ -264,7 +264,7 @@ class Orchestrator:
         """"This function will generate the email to be sent based on the news summaries.
         The email must have a funny subject and body must start with a joke and follow with a summary of the news and a funny comment at the end."""
         email:EmailField = await self.email_agent.invoke("\n\n".join(state["news"]))
-        print(f"Generated email:\nSubject: {email.subject}\nBody:\n{email.body}")
+        #print(f"Generated email:\nSubject: {email.subject}\nBody:\n{email.body}")
         
         return AgentState(
             news=state["news"],
@@ -272,16 +272,23 @@ class Orchestrator:
             email_body=email.body,
             email_generation_attempts=state["email_generation_attempts"] + 1
         )
-
-    async def send_email(self, state: AgentState) -> AgentState:
-        """ This function will send the email to the recipient defined in the environment variables."""
-        await asyncio.run(
-            EmailSender().send_email(
-                self.email_to,
-                state["email_subject"],
-                state["email_body"]
-            )
+    
+    def generate_failure_message(self, state: AgentState) -> AgentState:
+        """This function will generate a message to be sent to the user in case the email generation fails after max attempts to generate a funny email."""
+        return AgentState(
+            news=state["news"],
+            email_subject="Email generation failed",
+            email_body="Failed to generate a funny email after maximum attempts.",
+            email_generation_attempts=0
         )
+
+    def send_email(self, state: AgentState) -> AgentState:
+        """ This function will send the email to the recipient defined in the environment variables."""
+        EmailSender().send_email(
+            self.email_to,
+            state["email_subject"],
+            state["email_body"]
+        )        
         return state
     
     def decide_next_node(self, state:AgentState) -> Literal["OK", "FAIL", "BREAK"]:
@@ -290,6 +297,7 @@ class Orchestrator:
         if state["email_body"]:
             return "OK"
         if state["email_generation_attempts"] >= self.max_attempts:
+            print("Max attempts reached")
             return "BREAK"
         attempts = state["email_generation_attempts"]
         print(f"Email generation failed, attempts: {attempts} - retrying...")
@@ -320,18 +328,19 @@ class Orchestrator:
 
         graph.add_node("email_generator", self.generate_email)
         graph.add_node("email_sender", self.send_email)
+        graph.add_node("failure_message_generator", self.generate_failure_message)
 
         graph.add_edge(START, "email_generator")
         graph.add_conditional_edges(
             "email_generator",
             self.decide_next_node, 
             {
-                # Edge: Node
                 "OK": "email_sender",
                 "FAIL": "email_generator",
-                "BREAK": END #TODO: call node to generate message and send it.
+                "BREAK": "failure_message_generator"
             }
         )
+        graph.add_edge("failure_message_generator", "email_sender")
         graph.add_edge("email_sender", END)
 
         graph_agent = graph.compile()
