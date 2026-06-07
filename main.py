@@ -1,7 +1,6 @@
 import os
 import asyncio
 import smtplib
-from urllib import response
 import httpx
 from abc import ABC, abstractmethod
 from urllib.parse import urljoin
@@ -9,6 +8,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from email.message import EmailMessage
 from pydantic import BaseModel, Field
+from typing import TypedDict
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers.pydantic import PydanticOutputParser
@@ -230,35 +230,60 @@ class EmailSender:
             smtp.send_message(msg)
             smtp.quit()
 
+class AgentState(TypedDict):
+    news: list[str]
+    email_subject: str
+    email_body: str
+
 class Orchestrator:
     def __init__(self):
-        pass
-
-    async def invoke(self):
-
         load_dotenv()
 
-        news_limit = int(os.getenv("NEWS_LIMIT") or 5)
-        scraper = Scraper([
+        self.news_limit = int(os.getenv("NEWS_LIMIT") or 5)
+        self.scraper = Scraper([
             AnthropicNewsScraper(),
             LatentSpaceNewsScraper()
         ])
 
-        contents = scraper.scrape(news_limit)
-
-        summary_agent = BasicChain(
+        self.summary_agent = BasicChain(
             llm_provider=OpenRouterProvider(),
             prompt_provider=SummarizationPromptProvider()
         )
 
-        email_agent = PydanticChain(
+        self.email_agent = PydanticChain(
             llm_provider=OpenRouterProvider(),
             prompt_provider=EmailPromptProvider(),
             pydantic_object=EmailField
         )
 
+    async def generate_email(self, state: AgentState) -> AgentState:
+        """"This function will generate the email to be sent based on the news summaries.
+        The email must have a funny subject and body must start with a joke and follow with a summary of the news and a funny comment at the end."""
+        email:EmailField = await self.email_agent.invoke("\n\n".join(state["news"]))
+        print(f"Generated email:\nSubject: {email.subject}\nBody:\n{email.body}")
+        state["email_subject"] = email.subject
+        state["email_body"] = email.body
+        return state
+
+    async def send_email(self, state: AgentState):
+        """ This function will send the email to the recipient defined in the environment variables."""
+        EmailSender().send_email(
+            os.getenv("EMAIL_TO"), 
+            state["email_subject"], 
+            state["email_body"]
+        )
+    
+    def decide_next_node(self, state:AgentState) -> AgentState:
+        """This node will select the next node of the graph"""
+        # call the llm to decide the next node based on the state of the agent
+        pass
+
+    async def invoke(self):        
+
+        contents = self.scraper.scrape(self.news_limit)
+
         async def summarize_article(i: int, content: str) -> str:
-            summary = await summary_agent.invoke(content)
+            summary = await self.summary_agent.invoke(content)
             return f"Article {i}:\n{summary}\n{'-'*3}\n"
 
         tasks = [
@@ -275,16 +300,6 @@ class Orchestrator:
         # for i, content in enumerate(contents, 1):
         #     print(f"Article {i}:\n{content}\n{'-'*3}\n")
 
-        email:EmailField = await email_agent.invoke("\n\n".join(news))
-        print(f"Generated email:\nSubject: {email.subject}\nBody:\n{email.body}")
-
-
-
-        EmailSender().send_email(
-            os.getenv("EMAIL_TO"), 
-            email.subject, 
-            email.body
-        )
 
 
 def main():
