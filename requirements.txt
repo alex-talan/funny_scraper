@@ -4,5 +4,6 @@ lxml
 python-dotenv
 langchain-core
 langsmith
+langgraph
 langchain-openrouter
 aiosmtpd

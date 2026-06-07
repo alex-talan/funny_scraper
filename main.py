@@ -8,13 +8,14 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from email.message import EmailMessage
 from pydantic import BaseModel, Field
-from typing import TypedDict
+from typing import TypedDict, Literal
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers.pydantic import PydanticOutputParser
 from langsmith.async_client import AsyncClient
 from langchain_openrouter import ChatOpenRouter
 from openrouter.errors.toomanyrequestsresponse_error import TooManyRequestsResponseError
+from langgraph.graph import StateGraph, START, END
 
 def build_langsmith_client(api_key: str) -> AsyncClient:
     return AsyncClient(
@@ -234,12 +235,15 @@ class AgentState(TypedDict):
     news: list[str]
     email_subject: str
     email_body: str
+    email_generation_attempts: int
 
 class Orchestrator:
     def __init__(self):
         load_dotenv()
 
         self.news_limit = int(os.getenv("NEWS_LIMIT") or 5)
+        self.max_attempts = int(os.getenv("MAX_ATTEMPTS") or 3)
+        self.email_to = os.getenv("EMAIL_TO") or ""
         self.scraper = Scraper([
             AnthropicNewsScraper(),
             LatentSpaceNewsScraper()
@@ -261,26 +265,42 @@ class Orchestrator:
         The email must have a funny subject and body must start with a joke and follow with a summary of the news and a funny comment at the end."""
         email:EmailField = await self.email_agent.invoke("\n\n".join(state["news"]))
         print(f"Generated email:\nSubject: {email.subject}\nBody:\n{email.body}")
-        state["email_subject"] = email.subject
-        state["email_body"] = email.body
-        return state
-
-    async def send_email(self, state: AgentState):
-        """ This function will send the email to the recipient defined in the environment variables."""
-        EmailSender().send_email(
-            os.getenv("EMAIL_TO"), 
-            state["email_subject"], 
-            state["email_body"]
+        
+        return AgentState(
+            news=state["news"],
+            email_subject=email.subject,
+            email_body=email.body,
+            email_generation_attempts=state["email_generation_attempts"] + 1
         )
-    
-    def decide_next_node(self, state:AgentState) -> AgentState:
-        """This node will select the next node of the graph"""
-        # call the llm to decide the next node based on the state of the agent
-        pass
 
-    async def invoke(self):        
+    async def send_email(self, state: AgentState) -> AgentState:
+        """ This function will send the email to the recipient defined in the environment variables."""
+        await asyncio.run(
+            EmailSender().send_email(
+                self.email_to,
+                state["email_subject"],
+                state["email_body"]
+            )
+        )
+        return state
+    
+    def decide_next_node(self, state:AgentState) -> Literal["OK", "FAIL", "BREAK"]:
+        """This node will select the next node of the graph"""
+        # TODO: call the llm to decide the next node based on the state of the agent
+        if state["email_body"]:
+            return "OK"
+        if state["email_generation_attempts"] >= self.max_attempts:
+            return "BREAK"
+        attempts = state["email_generation_attempts"]
+        print(f"Email generation failed, attempts: {attempts} - retrying...")
+        return "FAIL"
+
+    async def invoke(self):
+
+        # SCRAPING & SUMMARIZATION (no graph logic needed here)
 
         contents = self.scraper.scrape(self.news_limit)
+        print("Scraped news articles, now summarizing...\n")
 
         async def summarize_article(i: int, content: str) -> str:
             summary = await self.summary_agent.invoke(content)
@@ -292,15 +312,38 @@ class Orchestrator:
         ]
 
         news = await asyncio.gather(*tasks)
+        print("Summarization completed. Now running Graph logic...\n")
 
-        for formatted_summary in news:
-            print(formatted_summary)
+        # GRAPH DEFINITION
 
+        graph = StateGraph(AgentState)
 
-        # for i, content in enumerate(contents, 1):
-        #     print(f"Article {i}:\n{content}\n{'-'*3}\n")
+        graph.add_node("email_generator", self.generate_email)
+        graph.add_node("email_sender", self.send_email)
 
+        graph.add_edge(START, "email_generator")
+        graph.add_conditional_edges(
+            "email_generator",
+            self.decide_next_node, 
+            {
+                # Edge: Node
+                "OK": "email_sender",
+                "FAIL": "email_generator",
+                "BREAK": END #TODO: call node to generate message and send it.
+            }
+        )
+        graph.add_edge("email_sender", END)
 
+        graph_agent = graph.compile()
+
+        initial_state = AgentState(
+            news=news,
+            email_subject="",
+            email_body="",
+            email_generation_attempts=0
+        )
+
+        await graph_agent.ainvoke(initial_state)
 
 def main():
     orchestrator = Orchestrator()
