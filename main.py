@@ -278,10 +278,12 @@ class Orchestrator:
         email:EmailField = await email_agent.invoke("\n\n".join(news))
         print(f"Generated email:\nSubject: {email.subject}\nBody:\n{email.body}")
 
+
+
         EmailSender().send_email(
             os.getenv("EMAIL_TO"), 
-            "Knock knock, it's the funny scraper", 
-            "\n\n".join(news)
+            email.subject, 
+            email.body
         )
 
 
