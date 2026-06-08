@@ -27,6 +27,8 @@ class EmailField(BaseModel):
     subject: str = Field(description="The subject of the email")
     body: str = Field(description="The body content of the email")
 
+class JudgeField(BaseModel):
+    is_funny: bool = Field(description="Whether the introduction of the email is funny or not")
 
 class LlmProvider(ABC):
 
@@ -67,6 +69,13 @@ class EmailPromptProvider(LangsmithPromptProvider):
             prompt_name="funny_scraper_email_prompt"
         )
 
+class JudgePromptProvider(LangsmithPromptProvider):
+    def __init__(self):
+        super().__init__(
+            api_key=os.getenv("LANGSMITH_KEY"), 
+            prompt_name="funny_scraper_judge_prompt"
+        )
+
 class OpenRouterProvider(LlmProvider):
 
     def __init__(self):
@@ -89,9 +98,11 @@ class OpenRouterProvider(LlmProvider):
 
 class BasicChain:
 
-    def __init__(self, 
+    def __init__(
+            self, 
             llm_provider: LlmProvider,
-            prompt_provider: PromptProvider):
+            prompt_provider: PromptProvider
+        ):
         self.llm = llm_provider
         self.prompt_provider = prompt_provider
 
@@ -106,8 +117,12 @@ class PydanticChain(BasicChain):
     def __init__(self, 
             llm_provider: LlmProvider,
             prompt_provider: PromptProvider,
-            pydantic_object: type):
-        super().__init__(llm_provider=llm_provider, prompt_provider=prompt_provider)
+            pydantic_object: type
+        ):
+        super().__init__(
+            llm_provider=llm_provider, 
+            prompt_provider=prompt_provider
+        )
         self.pydantic_object = pydantic_object
 
     async def invoke(self, input_message: str):
@@ -260,6 +275,12 @@ class Orchestrator:
             pydantic_object=EmailField
         )
 
+        self.judge_agent = PydanticChain(
+            llm_provider=OpenRouterProvider(),
+            prompt_provider=JudgePromptProvider(),
+            pydantic_object=JudgeField
+        )
+
     async def generate_email(self, state: AgentState) -> AgentState:
         """"This function will generate the email to be sent based on the news summaries.
         The email must have a funny subject and body must start with a joke and follow with a summary of the news and a funny comment at the end."""
@@ -291,14 +312,16 @@ class Orchestrator:
         )        
         return state
     
-    def decide_next_node(self, state:AgentState) -> Literal["OK", "FAIL", "BREAK"]:
+    async def decide_next_node(self, state:AgentState) -> Literal["OK", "FAIL", "BREAK"]:
         """This node will select the next node of the graph"""
-        # TODO: call the llm to decide the next node based on the state of the agent
-        if state["email_body"]:
+        result: JudgeField = await self.judge_agent.invoke(state["email_body"])
+        if result.is_funny:
             return "OK"
+        
         if state["email_generation_attempts"] >= self.max_attempts:
             print("Max attempts reached")
             return "BREAK"
+        
         attempts = state["email_generation_attempts"]
         print(f"Email generation failed, attempts: {attempts} - retrying...")
         return "FAIL"
