@@ -22,7 +22,7 @@ pip install -r requirements.txt
 |MODEL_NAME| |Model name|google/gemma-4-31b-it|
 |LANGSMITH_KEY|X|LangSmith platform API key| |
 |SMTP_HOST| |SMTP Server name|smtp.gmail.com|
-|SMTP_PORT| |SMTP Server port|=587|
+|SMTP_PORT| |SMTP Server port|587|
 |SMTP_USERNAME| |Sender username (usually the same as email)| |
 |SMTP_PASSWORD|X|Sender email application password| |
 |EMAIL_FROM| |Sender email| |

@@ -9,14 +9,15 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from email.message import EmailMessage
 from pydantic import BaseModel, Field
-from typing import TypedDict, Literal
+from typing import TypedDict, Literal, Union
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers.pydantic import PydanticOutputParser
+from langchain_core.messages import AIMessage, HumanMessage
 from langsmith.async_client import AsyncClient
 from langchain_openrouter import ChatOpenRouter
-from openrouter.errors.toomanyrequestsresponse_error import TooManyRequestsResponseError
 from langgraph.graph import StateGraph, START, END
+from openrouter.errors.toomanyrequestsresponse_error import TooManyRequestsResponseError
 
 def build_langsmith_client(api_key: str) -> AsyncClient:
     return AsyncClient(
@@ -100,41 +101,52 @@ class OpenRouterProvider(LlmProvider):
 class BasicChain:
 
     def __init__(
-            self, 
-            llm_provider: LlmProvider,
-            prompt_provider: PromptProvider
-        ):
+        self, 
+        llm_provider: LlmProvider,
+        prompt_provider: PromptProvider
+    ):
         self.llm = llm_provider
         self.prompt_provider = prompt_provider
 
-    async def invoke(self, input_message: str):
+    async def invoke(self, input_data: str | list[Union[HumanMessage, AIMessage]]):
         prompt_template = await self.prompt_provider.get_prompt()
-        messages = prompt_template.format_messages(question=input_message)
+        messages = prompt_template.format_messages()
+
+        if isinstance(input_data, str):
+            messages.append(HumanMessage(content=input_data))
+        else:
+            messages.extend(input_data)
         output = await self.llm.invoke(messages)
         return output.content
 
 class PydanticChain(BasicChain):
 
-    def __init__(self, 
-            llm_provider: LlmProvider,
-            prompt_provider: PromptProvider,
-            pydantic_object: type
-        ):
+    def __init__(
+        self, 
+        llm_provider: LlmProvider,
+        prompt_provider: PromptProvider,
+        pydantic_object: type
+    ):
         super().__init__(
             llm_provider=llm_provider, 
             prompt_provider=prompt_provider
         )
         self.pydantic_object = pydantic_object
 
-    async def invoke(self, input_message: str):
+    async def invoke(self, input_data: str | list[Union[HumanMessage, AIMessage]]):
         output_parser = PydanticOutputParser(pydantic_object=self.pydantic_object)
         format_instructions = output_parser.get_format_instructions()
-        prompt_template = await self.prompt_provider.get_prompt()
 
-        messages = prompt_template.format_messages(question=input_message, format_instructions=format_instructions)
+        prompt_template = await self.prompt_provider.get_prompt()
+        messages = prompt_template.format_messages(format_instructions=format_instructions)
+
+        if isinstance(input_data, str):
+            messages.append(HumanMessage(content=input_data))
+        else:
+            messages.extend(input_data)
+
         output = await self.llm.invoke(messages)
-        response = output_parser.parse(output.content)
-        return response
+        return output_parser.parse(output.content)
     
 class ScrapingStrategy(ABC):
 
@@ -147,13 +159,11 @@ class ScrapingStrategy(ABC):
         soup = BeautifulSoup(html, "lxml")
 
         news_links = self._extract_news_links(soup, self.main_url)
-
         contents = []
 
         for link in news_links[:k]:
             article_html = self._get_html(link)
             article_soup = BeautifulSoup(article_html, "lxml")
-
             content = self._extract_content(article_soup)
             contents.append(content)
 
@@ -252,6 +262,7 @@ class AgentState(TypedDict):
     email_subject: str
     email_body: str
     email_generation_attempts: int
+    email_generation_memory: list[Union[HumanMessage, AIMessage]]
 
 class Orchestrator:
     def __init__(self):
@@ -261,7 +272,7 @@ class Orchestrator:
         self.max_attempts = int(os.getenv("MAX_ATTEMPTS") or 3)
         self.email_to = os.getenv("EMAIL_TO") or ""
         self.scraper = Scraper([
-            AnthropicNewsScraper(),
+            #AnthropicNewsScraper(),
             LatentSpaceNewsScraper()
         ])
 
@@ -285,14 +296,20 @@ class Orchestrator:
     async def generate_email(self, state: AgentState) -> AgentState:
         """"This function will generate the email to be sent based on the news summaries.
         The email must have a funny subject and body must start with a joke and follow with a summary of the news and a funny comment at the end."""
-        email:EmailField = await self.email_agent.invoke("\n\n".join(state["news"]))
+        if state["email_generation_attempts"] > 0:
+            state["email_generation_memory"].append(HumanMessage(content="The previous email was not funny enough, please try harder!"))
+        
+        email:EmailField = await self.email_agent.invoke(state["email_generation_memory"])
         #print(f"Generated email:\nSubject: {email.subject}\nBody:\n{email.body}")
         
         return AgentState(
             news=state["news"],
             email_subject=email.subject,
             email_body=email.body,
-            email_generation_attempts=state["email_generation_attempts"] + 1
+            email_generation_attempts=state["email_generation_attempts"] + 1,
+            email_generation_memory=state["email_generation_memory"] + [
+                AIMessage(content=f"{{\"subject\": \"{email.subject}\", \"body\": \"{email.body}\"}}")
+            ]
         )
     
     def generate_failure_message(self, state: AgentState) -> AgentState:
@@ -375,7 +392,10 @@ class Orchestrator:
             news=news,
             email_subject="",
             email_body="",
-            email_generation_attempts=0
+            email_generation_attempts=0,
+            email_generation_memory=[
+                HumanMessage(content="\n\n".join(news))
+            ]
         )
 
         await graph_agent.ainvoke(initial_state)
