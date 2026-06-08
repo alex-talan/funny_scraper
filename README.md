@@ -12,8 +12,23 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-# Run
+# Environment variables
 
+| Name | Secret | Description | Default |
+|------|--------|-------------|---------|
+|NEWS_LIMIT| |Number of news to scrap from the site|3|
+|MAX_ATTEMPTS| |Maximum number of funny generation attempts|3| 
+|OPENROUTER_API_KEY|X|OpenRouter API key ^^| |
+|MODEL_NAME| |Model name|google/gemma-4-31b-it|
+|LANGSMITH_KEY|X|LangSmith platform API key| |
+|SMTP_HOST| |SMTP Server name|smtp.gmail.com|
+|SMTP_PORT| |SMTP Server port|=587|
+|SMTP_USERNAME| |Sender username (usually the same as email)| |
+|SMTP_PASSWORD|X|Sender email application password| |
+|EMAIL_FROM| |Sender email| |
+|EMAIL_TO| |Recipient email| |
+
+# Run
 ```sh
 python main.py
 ```
