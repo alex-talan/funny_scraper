@@ -80,11 +80,11 @@ class JudgePromptProvider(LangsmithPromptProvider):
 
 class OpenRouterProvider(LlmProvider):
 
-    def __init__(self):
+    def __init__(self, model_name: str):
         load_dotenv()
 
         self.llm = ChatOpenRouter(
-            model=os.getenv("MODEL_NAME"),
+            model=model_name,
             temperature=0,
         )
 
@@ -97,6 +97,25 @@ class OpenRouterProvider(LlmProvider):
                 wait_time = 5 * (attempt + 1)
                 print(f"Rate limit reached. Retrying in {wait_time} seconds...")
                 await asyncio.sleep(wait_time)
+
+
+class OpenRouterProviderFactory:
+    
+    @staticmethod
+    def create_for_summary():
+        model_name = os.getenv("DEFAULT_MODEL_NAME")
+        return OpenRouterProvider(model_name=model_name)
+    
+    @staticmethod
+    def create_for_generation():
+        model_name = os.getenv("DEFAULT_MODEL_NAME")
+        return OpenRouterProvider(model_name=model_name)
+    
+    @staticmethod
+    def create_for_judge():
+        model_name = os.getenv("JUDGE_MODEL_NAME")
+        return OpenRouterProvider(model_name=model_name)
+
 
 class BasicChain:
 
@@ -272,23 +291,23 @@ class Orchestrator:
         self.max_attempts = int(os.getenv("MAX_ATTEMPTS") or 3)
         self.email_to = os.getenv("EMAIL_TO") or ""
         self.scraper = Scraper([
-            #AnthropicNewsScraper(),
+            AnthropicNewsScraper(),
             LatentSpaceNewsScraper()
         ])
 
         self.summary_agent = BasicChain(
-            llm_provider=OpenRouterProvider(),
+            llm_provider=OpenRouterProviderFactory.create_for_summary(),
             prompt_provider=SummarizationPromptProvider()
         )
 
         self.email_agent = PydanticChain(
-            llm_provider=OpenRouterProvider(),
+            llm_provider=OpenRouterProviderFactory.create_for_generation(),
             prompt_provider=EmailPromptProvider(),
             pydantic_object=EmailField
         )
 
         self.judge_agent = PydanticChain(
-            llm_provider=OpenRouterProvider(),
+            llm_provider=OpenRouterProviderFactory.create_for_judge(),
             prompt_provider=JudgePromptProvider(),
             pydantic_object=JudgeField
         )

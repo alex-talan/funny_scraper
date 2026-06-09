@@ -14,13 +14,16 @@ pip install -r requirements.txt
 
 # Environment variables
 
+Configure your `.env` file as follows: 
+
 | Name | Secret | Description | Default |
 |------|--------|-------------|---------|
 |NEWS_LIMIT| |Number of news to scrap from the site|3|
 |MAX_ATTEMPTS| |Maximum number of funny generation attempts|3| 
 |OPENROUTER_API_KEY|X|OpenRouter API key ^^| |
-|MODEL_NAME| |Model name|google/gemma-4-31b-it|
-|LANGSMITH_KEY|X|LangSmith platform API key| |
+|DEFAULT_MODEL_NAME| |Generation model name|google/gemma-4-31b-it|
+|JUDGE_MODEL_NAME| |Model use for the judgement process|openai/gpt-4.1-mini|
+|LANGSMITH_KEY|X|LangSmith platform API key to load prompts| |
 |SMTP_HOST| |SMTP Server name|smtp.gmail.com|
 |SMTP_PORT| |SMTP Server port|587|
 |SMTP_USERNAME| |Sender username (usually the same as email)| |
