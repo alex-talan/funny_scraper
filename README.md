@@ -1,6 +1,7 @@
 # Introduction
-Scraper: [BeautifulSoup](https://www.crummy.com/software/BeautifulSoup/bs4/doc/#api-documentation)
-Email Server: [aiosmtpd](https://realpython.com/python-send-email/)
+- Scraper: [BeautifulSoup](https://www.crummy.com/software/BeautifulSoup/bs4/doc/#api-documentation)
+- Email Server: [aiosmtpd](https://realpython.com/python-send-email/)
+- LangChain & LangGraph
 
 # Setup for Google SMTP server
 Go to https://myaccount.google.com/apppasswords and create an application password to configure SMTP_PASSWORD env variable.
