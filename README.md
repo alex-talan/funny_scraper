@@ -36,3 +36,15 @@ Configure your `.env` file as follows:
 ```sh
 python main.py
 ```
+
+# LangGraph schema 
+
+```mermaid
+flowchart TD
+    A[START]-->B[email_generator]
+    B-->|OK| C[email_sender]
+    B-->|FAIL| B
+    B-->|BREAK| D[failure_message_generator]
+    D-->C
+    C-->E[END]
+```
