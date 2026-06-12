@@ -237,6 +237,22 @@ class LatentSpaceNewsScraper(ScrapingStrategy):
     
     def is_news_link(self, absolute_url: str) -> bool:
         return "/p/" in absolute_url
+
+class OpenAINewsScraper(ScrapingStrategy):
+     
+    def __init__(self):
+        super().__init__("https://openai.com/fr-FR/news/", "OpenAI News")
+    
+    def is_news_link(self, absolute_url: str) -> bool:
+        return "openai.com/index/" in absolute_url
+
+class GoogleAIResearchNewsScraper(ScrapingStrategy):
+
+    def __init__(self):
+        super().__init__("https://blog.google/innovation-and-ai/", "Google AI Research News")
+    
+    def is_news_link(self, absolute_url: str) -> bool:
+        return "blog.google/innovation-and-ai/" in absolute_url
     
 class Scraper:
     def __init__(self, strategies: list[ScrapingStrategy]):
